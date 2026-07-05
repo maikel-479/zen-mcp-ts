@@ -1,0 +1,39 @@
+{
+  "name": "zen-mcp-ts",
+  "version": "1.0.0",
+  "description": "MCP server for Zen Browser automation via WebDriver BiDi",
+  "keywords": [
+    "browser-automation",
+    "mcp",
+    "model-context-protocol",
+    "webdriver-bidi",
+    "zen-browser"
+  ],
+  "license": "MIT",
+  "bin": {
+    "zen-mcp-ts": "dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.10.0",
+      "onFail": "download"
+    }
+  }
+}
