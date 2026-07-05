@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "zen-browser": {
+      "type": "local",
+      "command": ["node", "C:\\Users\\ADEMOLA ADEMUYIWA\\zen-mcp-ts\\dist\\index.js"],
+      "enabled": true
+    }
+  }
+}
