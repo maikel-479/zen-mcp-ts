@@ -115,17 +115,18 @@ export class BiDiClient {
             msg.includes("Maximum number of active sessions") ||
             msg.includes("session not created")
           ) {
-            log(
-              "Zombie session detected — session.end is connection-scoped, cannot clear remotely",
-            );
-            reject(
-              new Error(
-                `Zen Browser has a zombie BiDi session from a previous client.\n` +
-                  `session.end is connection-scoped and cannot clear it remotely.\n\n` +
-                  `Fix: Restart Zen Browser:\n  ${getStartCommand(this.port)}\n\n` +
-                  `Or close Zen completely and relaunch with:\n  ${getStartCommand(this.port)}`,
-              ),
-            );
+            log("Zombie session detected — attempting to reuse existing session");
+            try {
+              await this._reuseSession();
+              resolve();
+            } catch {
+              reject(
+                new Error(
+                  `Zen Browser has a zombie BiDi session that cannot be reused.\n` +
+                    `Restart Zen Browser:\n  ${getStartCommand(this.port)}`,
+                ),
+              );
+            }
           } else {
             reject(e instanceof Error ? e : new Error(msg));
           }
@@ -148,6 +149,18 @@ export class BiDiClient {
     if (treeResult.contexts && treeResult.contexts.length > 0) {
       this._currentContext = treeResult.contexts[0].context;
       log("Active context:", this._currentContext);
+    }
+  }
+
+  private async _reuseSession(): Promise<void> {
+    log("Trying to reuse existing session via browsingContext.getTree...");
+    const treeResp = await this.send("browsingContext.getTree", {});
+    const treeResult = treeResp.result as unknown as GetTreeResult;
+    if (treeResult.contexts && treeResult.contexts.length > 0) {
+      this._currentContext = treeResult.contexts[0].context;
+      log("Reused active context:", this._currentContext);
+    } else {
+      throw new Error("No active browsing contexts found to reuse");
     }
   }
 

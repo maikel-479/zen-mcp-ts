@@ -274,6 +274,10 @@ process.on("beforeExit", async () => {
   } catch {}
 });
 
+process.stdin.on("end", () => {
+  bidi.disconnect().catch(() => {}).finally(() => process.exit(0));
+});
+
 // ─── Start Server ───────────────────────────────────────────────────
 
 async function main() {
