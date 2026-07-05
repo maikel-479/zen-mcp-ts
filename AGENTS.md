@@ -31,12 +31,12 @@ AI Client ──stdio/MCP──> zen-mcp-ts ──WebSocket/BiDi──> Zen Brow
 
 ### Tool modules (src/tools/)
 
-| File | Tools |
-|---|---|
-| browse.ts | zen_list_pages, zen_select_page, zen_new_tab, zen_navigate, zen_close_tab |
-| see.ts | zen_snapshot, zen_screenshot, zen_get_page_text, zen_get_form_fields |
+| File        | Tools                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| browse.ts   | zen_list_pages, zen_select_page, zen_new_tab, zen_navigate, zen_close_tab                   |
+| see.ts      | zen_snapshot, zen_screenshot, zen_get_page_text, zen_get_form_fields                        |
 | interact.ts | zen_click, zen_fill, zen_select_option, zen_check, zen_press_key, zen_fill_form, zen_scroll |
-| utility.ts | zen_evaluate, zen_wait, zen_wait_for, zen_reconnect |
+| utility.ts  | zen_evaluate, zen_wait, zen_wait_for, zen_reconnect                                         |
 
 Tools are plain async functions, not classes. They call `BiDiClient` methods (`callFunction`, `evaluate`, `navigate`, etc.) which inject JavaScript into the page via `script.callFunction` BiDi commands.
 

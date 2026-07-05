@@ -111,23 +111,21 @@ export class BiDiClient {
           resolve();
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes("Maximum number of active sessions")) {
-            log("Zombie session detected");
-            try {
-              await this._endZombieSession();
-              await this._createSession();
-              log("Zombie recovery succeeded");
-              resolve();
-            } catch (retryErr: unknown) {
-              const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-              reject(
-                new Error(
-                  `Zen Browser has a zombie session that cannot be cleared remotely.\n` +
-                    `Fix: Restart Zen Browser:\n  ${getStartCommand(this.port)}\n\n` +
-                    `Technical detail: ${retryMsg}`,
-                ),
-              );
-            }
+          if (
+            msg.includes("Maximum number of active sessions") ||
+            msg.includes("session not created")
+          ) {
+            log(
+              "Zombie session detected — session.end is connection-scoped, cannot clear remotely",
+            );
+            reject(
+              new Error(
+                `Zen Browser has a zombie BiDi session from a previous client.\n` +
+                  `session.end is connection-scoped and cannot clear it remotely.\n\n` +
+                  `Fix: Restart Zen Browser:\n  ${getStartCommand(this.port)}\n\n` +
+                  `Or close Zen completely and relaunch with:\n  ${getStartCommand(this.port)}`,
+              ),
+            );
           } else {
             reject(e instanceof Error ? e : new Error(msg));
           }
@@ -151,36 +149,6 @@ export class BiDiClient {
       this._currentContext = treeResult.contexts[0].context;
       log("Active context:", this._currentContext);
     }
-  }
-
-  private async _endZombieSession(): Promise<void> {
-    log("Attempting zombie session recovery...");
-    try {
-      this.ws?.close();
-    } catch {}
-    this.ws = null;
-    this.sessionId = null;
-    this.pending.clear();
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.wsUrl);
-      ws.once("open", () => {
-        this.ws = ws;
-        this._setupListeners(ws);
-        log("Fresh WebSocket opened for zombie recovery");
-        resolve();
-      });
-      ws.once("error", (e) => {
-        reject(
-          new Error(
-            `Zombie session recovery failed: cannot reconnect to Zen.\n` +
-              `Restart Zen Browser:\n  ${getStartCommand(this.port)}`,
-          ),
-        );
-      });
-    });
   }
 
   private _setupListeners(ws: WebSocket): void {
