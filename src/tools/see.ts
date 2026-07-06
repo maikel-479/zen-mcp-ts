@@ -1,8 +1,11 @@
 import type { BiDiClient } from "../bidi-client.js";
+import type { DaemonClient } from "../daemon-client.js";
 import type { BiDiResult, ToolResult } from "../types.js";
 import { text } from "./browse.js";
 
-export function registerSeeTools(bidi: BiDiClient) {
+type BrowserClient = BiDiClient | DaemonClient;
+
+export function registerSeeTools(bidi: BrowserClient) {
   return {
     zen_snapshot: async (args: { filter?: string; selector?: string }): Promise<ToolResult> => {
       const filter = args?.filter || "all";

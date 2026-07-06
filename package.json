@@ -11,7 +11,8 @@
   ],
   "license": "MIT",
   "bin": {
-    "zen-mcp-ts": "dist/index.js"
+    "zen-mcp": "dist/index.js",
+    "zen-mcp-daemon": "dist/daemon.js"
   },
   "type": "module",
   "scripts": {

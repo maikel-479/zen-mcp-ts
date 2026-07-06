@@ -3,7 +3,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-import { BiDiClient } from "./bidi-client.js";
+import { DaemonClient } from "./daemon-client.js";
 import { registerBrowseTools } from "./tools/browse.js";
 import { registerSeeTools } from "./tools/see.js";
 import { registerInteractTools } from "./tools/interact.js";
@@ -33,13 +33,11 @@ import {
   PeekTextSchema,
 } from "./types.js";
 
-const PORT = parseInt(process.env.ZEN_DEBUG_PORT || "9222");
-
 function log(...args: unknown[]) {
   console.error("[zen-mcp]", ...args);
 }
 
-const bidi = new BiDiClient(PORT);
+const bidi = new DaemonClient();
 const browseTools = registerBrowseTools(bidi);
 const seeTools = registerSeeTools(bidi);
 const interactTools = registerInteractTools(bidi);
@@ -273,12 +271,18 @@ server.registerTool(
   async () => utilityTools.zen_reconnect(),
 );
 
-// ─── Six-Layer Cleanup ──────────────────────────────────────────────
+// ─── Cleanup ────────────────────────────────────────────────────────
 
-// Layer 1: Transport close (set after transport is created)
 let transport: StdioServerTransport;
 
-// Layer 2: stdin end/close
+async function gracefulShutdown(signal: string) {
+  log(`Received ${signal}, cleaning up...`);
+  try {
+    await bidi.disconnect();
+  } catch {}
+  process.exit(0);
+}
+
 process.stdin.on("end", () => {
   log("stdin ended");
   bidi
@@ -291,24 +295,12 @@ process.stdin.on("close", () => {
   bidi.disconnect().catch(() => {});
 });
 
-// Layer 3: Signals
-async function gracefulShutdown(signal: string) {
-  log(`Received ${signal}, cleaning up...`);
-  try {
-    await bidi.disconnect();
-  } catch (e) {
-    log("Cleanup error (non-fatal):", e);
-  }
-  process.exit(0);
-}
-
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 if (process.platform !== "win32") {
   process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 }
 
-// Layer 4: Uncaught errors
 process.on("uncaughtException", async (err) => {
   console.error("uncaughtException:", err);
   await bidi.disconnect().catch(() => {});
@@ -321,14 +313,12 @@ process.on("unhandledRejection", async (reason) => {
   process.exit(1);
 });
 
-// Layer 5: beforeExit (synchronous cleanup of state)
 process.on("beforeExit", async () => {
   try {
-    await bidi.endSession();
+    await bidi.disconnect();
   } catch {}
 });
 
-// Layer 6: process exit (logs only — no async work runs here)
 process.on("exit", (code) => {
   log(`process exiting with code ${code}`);
 });
@@ -336,6 +326,10 @@ process.on("exit", (code) => {
 // ─── Start Server ───────────────────────────────────────────────────
 
 async function main() {
+  log("Connecting to daemon...");
+  await bidi.connect();
+  log("Connected to daemon, session:", bidi.sessionId);
+
   transport = new StdioServerTransport();
   transport.onclose = async () => {
     log("Transport closed");
@@ -343,7 +337,7 @@ async function main() {
     process.exit(0);
   };
   await server.connect(transport);
-  log(`Server started, connecting to Zen on ws://127.0.0.1:${PORT}/session`);
+  log("MCP server ready");
 }
 
 main().catch((error) => {

@@ -1,9 +1,12 @@
 import type { BiDiClient } from "../bidi-client.js";
+import type { DaemonClient } from "../daemon-client.js";
 import type { ToolResult } from "../types.js";
 import { text } from "./browse.js";
 import { extractValue } from "./see.js";
 
-export function registerInteractTools(bidi: BiDiClient) {
+type BrowserClient = BiDiClient | DaemonClient;
+
+export function registerInteractTools(bidi: BrowserClient) {
   return {
     zen_click: async (args: { selector: string }): Promise<ToolResult> => {
       const MAX_RETRIES = 5;

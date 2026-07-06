@@ -10,17 +10,39 @@ vp check             # Format + lint + type check
 vp check --fix       # Auto-fix formatting
 node dist/index.js   # Run server (requires Zen with --remote-debugging-port 9222)
 node tests/test-all-features.cjs  # Run full test suite (requires Zen running)
+node dist/cli.js daemon start|stop|status  # Manage the daemon
 ```
 
 `vp build` does NOT work — this is a Node.js CLI project, not a Vite web app. Always use `vp exec tsc`.
 
 ## Architecture
 
-Single MCP server process communicating over stdio (MCP) and WebSocket (BiDi).
+```
+AI Client ──stdio/MCP──> zen-mcp (thin proxy) ──TCP:9223──> zen-mcp-daemon ──WebSocket/BiDi──> Zen Browser (port 9222)
+```
 
-```
-AI Client ──stdio/MCP──> zen-mcp-ts ──WebSocket/BiDi──> Zen Browser (port 9222)
-```
+The MCP server is a thin proxy that forwards all BiDi commands to a persistent daemon over TCP. The daemon owns the BiDi session permanently — it stays alive across MCP server restarts, eliminating zombie sessions entirely.
+
+### Daemon
+
+`src/daemon.ts` — Long-lived background process. Creates the BiDi session on startup, manages session lifecycle, handles cleanup on shutdown. Listens on TCP port 9223 for MCP server connections.
+
+- Auto-started by the MCP server if not running
+- Writes PID to `$TEMP/zen-mcp-daemon.pid`
+- Saves `webSocketUrl` to `$TEMP/zen-mcp-session.json`
+- Reconnects to existing sessions when MCP server reconnects
+- Handles `connect`, `bidi`, `end-session`, `status` commands
+
+### Daemon Client
+
+`src/daemon-client.ts` — BiDiClient-compatible proxy used by the MCP server. Forwards all BiDi commands to the daemon over TCP. Provides the same interface as `BiDiClient` so tool modules don't need to know about the daemon.
+
+### CLI
+
+`src/cli.ts` — Daemon management commands:
+- `zen-mcp daemon start` — Start daemon in background
+- `zen-mcp daemon stop` — Stop daemon gracefully
+- `zen-mcp daemon status` — Check if daemon is running
 
 ### Agent-Tab Isolation Model
 
@@ -30,20 +52,9 @@ The agent and user share the same browser but operate in separate tabs:
 - **User tabs**: The user browses freely in their own tabs. The agent can peek at any user tab (read-only) without interfering.
 - **Explicit handoff**: If the user wants the agent to act on their tab, they use `zen_select_page` to switch the agent's target.
 
-This mirrors how Perplexity Comet and Atlas (OWL) handle user-agent coexistence — isolated contexts with explicit access grants.
-
 ### Entry point
 
-`src/index.ts` — creates `McpServer`, registers 22 tools, starts `StdioServerTransport`.
-
-### Core module
-
-`src/bidi-client.ts` — `BiDiClient` class. Manages WebSocket lifecycle, BiDi sessions, auto-reconnect (exponential backoff, 3 attempts), zombie session recovery, and agent tab management. All browser interaction goes through this client.
-
-Key properties:
-
-- `_agentContext` — The tab created for the agent. Set on first connect.
-- `_currentContext` — The tab currently targeted by write operations. Defaults to agent tab, can be switched via `zen_select_page`.
+`src/index.ts` — Creates `McpServer`, registers 22 tools, starts `StdioServerTransport`. Connects to daemon on startup. On shutdown, disconnects from daemon (session persists).
 
 ### Tool modules (src/tools/)
 
@@ -54,7 +65,7 @@ Key properties:
 | interact.ts | zen_click, zen_fill, zen_select_option, zen_check, zen_press_key, zen_fill_form, zen_scroll              |
 | utility.ts  | zen_evaluate, zen_wait, zen_wait_for, zen_reconnect                                                      |
 
-Tools are plain async functions, not classes. They call `BiDiClient` methods (`callFunction`, `evaluate`, `navigate`, etc.) which inject JavaScript into the page via `script.callFunction` BiDi commands.
+Tools accept either `BiDiClient` or `DaemonClient` via the `BrowserClient` type union. They call methods like `callFunction`, `evaluate`, `navigate`, etc. which inject JavaScript into the page via `script.callFunction` BiDi commands.
 
 Peek tools (`zen_peek_screenshot`, `zen_peek_text`) accept a tab index and read from that tab without switching the agent's active context.
 
@@ -65,6 +76,7 @@ Peek tools (`zen_peek_screenshot`, `zen_peek_text`) accept a tab index and read 
 ## Key facts
 
 - **Protocol:** WebDriver BiDi (NOT CDP). Firefox/Gecko does not implement Chrome DevTools Protocol (removed in Firefox 141+).
+- **Daemon port:** 9223 (TCP, localhost only). Configurable via `ZEN_MCP_DAEMON_PORT` env var.
 - **Zod import:** `import { z } from "zod/v4"` — SDK requires Zod v4 API.
 - **MCP SDK v1:** `@modelcontextprotocol/sdk` v1.29.0. Uses `McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`.
 - **Form filling:** Uses native value setters + `input`/`change` event dispatch for React/Vue/Angular compatibility.
@@ -79,11 +91,15 @@ Peek tools (`zen_peek_screenshot`, `zen_peek_text`) accept a tab index and read 
 - The `inputSchema` in `registerTool()` must use `.shape` (e.g., `NavigateSchema.shape`) to pass the Zod schema object, not the Zod type itself.
 - Tool handlers must return objects matching the SDK's `CallToolResult` shape with an index signature — the `ToolResult` interface in `types.ts` handles this.
 - Top-level `await` is used in `index.ts` (works because `"type": "module"` in package.json).
-- BiDi sessions are exclusive — only one session at a time. The agent reuses sessions when possible and creates new ones only when needed.
+- BiDi sessions are exclusive — only one session at a time. The daemon manages this by keeping a single session alive permanently.
+- The daemon is a detached background process. It stays alive after the MCP server exits. Use `zen-mcp daemon stop` to stop it.
+- On Windows, `fileURLToPath(import.meta.url)` is used for path resolution (not `new URL().pathname` which has issues with drive letters).
 
 ## Testing
 
 `tests/test-all-features.cjs` — Spawns the MCP server, sends MCP protocol messages over stdio, and tests all 22 tools against a live Zen Browser instance. Requires Zen running with `--remote-debugging-port 9222`.
+
+Note: The daemon persists after test completion. Run `zen-mcp daemon stop` or kill the daemon process to clean up.
 
 The test harness validates:
 

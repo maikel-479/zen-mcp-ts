@@ -1,9 +1,12 @@
 import type { BiDiClient } from "../bidi-client.js";
+import type { DaemonClient } from "../daemon-client.js";
 import type { ToolResult } from "../types.js";
 import { text } from "./browse.js";
 import { extractValue } from "./see.js";
 
-export function registerUtilityTools(bidi: BiDiClient) {
+type BrowserClient = BiDiClient | DaemonClient;
+
+export function registerUtilityTools(bidi: BrowserClient) {
   return {
     zen_evaluate: async (args: { script: string }): Promise<ToolResult> => {
       let script = args.script;
@@ -72,7 +75,9 @@ export function registerUtilityTools(bidi: BiDiClient) {
       try {
         await bidi.disconnect();
       } catch {}
-      bidi.resetIntentionalDisconnect();
+      if ("resetIntentionalDisconnect" in bidi) {
+        (bidi as BiDiClient).resetIntentionalDisconnect();
+      }
       await bidi.connect();
       return text(`Reconnected to Zen Browser. Session active.`);
     },

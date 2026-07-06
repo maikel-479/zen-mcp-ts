@@ -1,7 +1,10 @@
 import type { BiDiClient } from "../bidi-client.js";
+import type { DaemonClient } from "../daemon-client.js";
 import type { ToolResult } from "../types.js";
 
-export function registerBrowseTools(bidi: BiDiClient) {
+type BrowserClient = BiDiClient | DaemonClient;
+
+export function registerBrowseTools(bidi: BrowserClient) {
   return {
     zen_list_pages: async (): Promise<ToolResult> => {
       const contexts = await bidi.getContexts();
