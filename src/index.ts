@@ -340,6 +340,7 @@ async function main() {
   transport.onclose = async () => {
     log("Transport closed");
     await bidi.disconnect();
+    process.exit(0);
   };
   await server.connect(transport);
   log(`Server started, connecting to Zen on ws://127.0.0.1:${PORT}/session`);

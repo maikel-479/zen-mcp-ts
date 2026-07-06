@@ -38,7 +38,8 @@ export class BiDiClient {
   private _intentionalDisconnect = false;
   private _reconnecting = false;
   private _connectPromise: Promise<void> | null = null;
-  private _cleaningUp = false;
+  private _disconnectPromise: Promise<void> | null = null;
+  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private port: number) {}
 
@@ -74,14 +75,10 @@ export class BiDiClient {
     }
 
     try {
-      const { ws, sessionId, reused } = await acquireSession(this.port);
+      const { ws, sessionId } = await acquireSession(this.port);
       this.ws = ws;
       this.sessionId = sessionId;
       this._setupListeners(ws);
-
-      if (reused) {
-        log("Reattached to existing session:", sessionId);
-      }
 
       await this._ensureAgentTab();
     } catch (e: unknown) {
@@ -108,19 +105,6 @@ export class BiDiClient {
     this._agentContext = result.context;
     this._currentContext = this._agentContext;
     log("Agent tab:", this._agentContext);
-  }
-
-  private async _reuseSession(): Promise<void> {
-    log("Trying to reuse existing session via browsingContext.getTree...");
-    const treeResp = await this.send("browsingContext.getTree", {});
-    const treeResult = treeResp.result as unknown as GetTreeResult;
-    if (treeResult.contexts && treeResult.contexts.length > 0) {
-      this._currentContext = treeResult.contexts[0].context;
-      this._agentContext = this._currentContext;
-      log("Reused active context:", this._currentContext);
-    } else {
-      throw new Error("No active browsing contexts found to reuse");
-    }
   }
 
   private _setupListeners(ws: WebSocket): void {
@@ -167,7 +151,12 @@ export class BiDiClient {
     this._reconnecting = true;
     const delay = RECONNECT_BASE_DELAY * Math.pow(2, attempt - 1);
     log(`Reconnecting in ${delay}ms (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})...`);
-    setTimeout(async () => {
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      if (this._intentionalDisconnect) {
+        this._reconnecting = false;
+        return;
+      }
       try {
         await this.connect();
         log("Reconnected successfully");
@@ -319,6 +308,11 @@ export class BiDiClient {
   }
 
   async endSession(): Promise<void> {
+    this._intentionalDisconnect = true;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this.ws?.readyState === WebSocket.OPEN && this.sessionId) {
       try {
         await this.send("session.end", {}, 3000);
@@ -327,14 +321,32 @@ export class BiDiClient {
       } catch (e) {
         log("Session end error (non-fatal):", e);
       }
-      this.sessionId = null;
+    }
+    this.sessionId = null;
+    if (this.ws) {
+      try {
+        this.ws.terminate();
+      } catch {}
+      this.ws = null;
     }
   }
 
   async disconnect(): Promise<void> {
-    if (this._cleaningUp) return;
-    this._cleaningUp = true;
+    if (this._disconnectPromise) return this._disconnectPromise;
+    this._disconnectPromise = this._doDisconnect();
+    try {
+      await this._disconnectPromise;
+    } finally {
+      this._disconnectPromise = null;
+    }
+  }
+
+  private async _doDisconnect(): Promise<void> {
     this._intentionalDisconnect = true;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     try {
       if (this.ws?.readyState === WebSocket.OPEN && this.sessionId) {
         await this.send("session.end", {}, 3000);
@@ -351,7 +363,6 @@ export class BiDiClient {
         } catch {}
         this.ws = null;
       }
-      this._cleaningUp = false;
     }
   }
 

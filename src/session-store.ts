@@ -46,8 +46,14 @@ async function endZombieSession(record: SessionRecord): Promise<boolean> {
         ws.close();
         reject(new Error("Connection timeout"));
       }, 5000);
-      ws.once("open", () => { clearTimeout(timer); resolve(); });
-      ws.once("error", (e) => { clearTimeout(timer); reject(e); });
+      ws.once("open", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      ws.once("error", (e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
     });
 
     // Send session.end
@@ -79,12 +85,9 @@ async function endZombieSession(record: SessionRecord): Promise<boolean> {
   }
 }
 
-export async function acquireSession(port: number): Promise<{
-  ws: WebSocket;
-  sessionId: string;
-  reused: boolean;
-}> {
-  // Always try session.new first — then clean up any zombie if it fails.
+async function tryCreateSession(
+  port: number,
+): Promise<{ ws: WebSocket; sessionId: string } | null> {
   try {
     const { ws, sessionId, webSocketUrl } = await createFreshSession(port);
     await saveRecord({
@@ -93,53 +96,44 @@ export async function acquireSession(port: number): Promise<{
       pid: process.pid,
       createdAt: Date.now(),
     });
-    return { ws, sessionId, reused: false };
+    return { ws, sessionId };
+  } catch {
+    return null;
+  }
+}
+
+export async function acquireSession(port: number): Promise<{
+  ws: WebSocket;
+  sessionId: string;
+}> {
+  // Always try session.new first — then clean up any zombie if it fails.
+  try {
+    const result = await tryCreateSession(port);
+    if (result) return result;
+    throw new Error("session.new failed");
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
 
-    if (
-      msg.includes("Maximum number of active sessions") ||
-      msg.includes("session not created")
-    ) {
+    if (msg.includes("Maximum number of active sessions") || msg.includes("session not created")) {
       // A zombie exists. Try to end it using the saved webSocketUrl.
       const prior = await loadRecord();
       if (prior) {
         const cleared = await endZombieSession(prior);
         if (cleared) {
-          // Zombie cleared — try session.new again
-          try {
-            const { ws, sessionId, webSocketUrl } = await createFreshSession(port);
-            await saveRecord({
-              sessionId,
-              webSocketUrl,
-              pid: process.pid,
-              createdAt: Date.now(),
-            });
+          const result = await tryCreateSession(port);
+          if (result) {
             log("Session created after clearing zombie");
-            return { ws, sessionId, reused: false };
-          } catch (retryErr) {
-            // Still failing — fall through to error
-            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            log("Session creation still failed after clearing zombie:", retryMsg);
+            return result;
           }
         } else {
           // Could not connect to old session — it's probably already dead
           // (Zen restarted, session is gone). Clear stale record and retry.
           log("Old session unreachable — clearing stale record and retrying");
           await deleteRecord();
-          try {
-            const { ws, sessionId, webSocketUrl } = await createFreshSession(port);
-            await saveRecord({
-              sessionId,
-              webSocketUrl,
-              pid: process.pid,
-              createdAt: Date.now(),
-            });
+          const result = await tryCreateSession(port);
+          if (result) {
             log("Session created after clearing stale record");
-            return { ws, sessionId, reused: false };
-          } catch (retryErr) {
-            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            log("Session creation still failed:", retryMsg);
+            return result;
           }
         }
 
@@ -158,8 +152,7 @@ export async function acquireSession(port: number): Promise<{
         }
       } else {
         log(
-          "Foreign BiDi session is attached to Zen.\n" +
-            "Close the other client or restart Zen.",
+          "Foreign BiDi session is attached to Zen.\n" + "Close the other client or restart Zen.",
         );
       }
     }
@@ -217,8 +210,7 @@ function createFreshSession(
 
         const sessionId = msg.result.sessionId;
         const wsUrl =
-          msg.result.capabilities?.webSocketUrl ||
-          `ws://127.0.0.1:${port}/session/${sessionId}`;
+          msg.result.capabilities?.webSocketUrl || `ws://127.0.0.1:${port}/session/${sessionId}`;
         log("New session created:", sessionId);
         resolve({ ws, sessionId, webSocketUrl: wsUrl });
       };

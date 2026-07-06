@@ -1,0 +1,131 @@
+[
+  {
+    "name": "initialize",
+    "pass": true,
+    "detail": "{\"tools\":{\"listChanged\":true}}"
+  },
+  {
+    "name": "initialized",
+    "pass": true
+  },
+  {
+    "name": "tools/list",
+    "pass": true,
+    "detail": "22 tools: zen_list_pages, zen_select_page, zen_new_tab, zen_navigate, zen_close_tab, zen_snapshot, zen_screenshot, zen_get_page_text, zen_get_form_fields, zen_peek_screenshot, zen_peek_text, zen_click, zen_fill, zen_select_option, zen_check, zen_press_key, zen_fill_form, zen_scroll, zen_evaluate, zen_wait, zen_wait_for, zen_reconnect"
+  },
+  {
+    "name": "zen_navigate",
+    "pass": true,
+    "detail": "Navigated to https://example.com (navigation: 204f7313-cf0e-4d3d-9a4b-f267f672bc2f)"
+  },
+  {
+    "name": "zen_list_pages",
+    "pass": true,
+    "detail": "[\n  {\n    \"index\": 0,\n    \"contextId\": \"eea44f9c-9ef0-4e35-9ad2-df64c92cbf83\",\n    \"url\": \"about:blank\",\n    \"active\": false,\n    \"isAgentTab\": false,\n    \"children\": 0\n  },\n  {\n    \"index\": 1,\n    \"contextId\": \"0010418b-e7af-4f7f-9f73-204b0078fe04\",\n    \"url\": \"https://example.com/\",\n    \"active\": "
+  },
+  {
+    "name": "zen_snapshot",
+    "pass": true,
+    "detail": "{\n  \"count\": 4,\n  \"elements\": [\n    {\n      \"tag\": \"h1\",\n      \"selector\": \"h1\",\n      \"text\": \"Example Domain\"\n    },\n    {\n      \"tag\": \"p\",\n      \"selector\": \"p\",\n      \"text\": \"This domain is for use in documentation examples without needing permission. Avoid use in operations.\"\n    },\n    {\n   "
+  },
+  {
+    "name": "zen_screenshot",
+    "pass": true,
+    "detail": "image data present"
+  },
+  {
+    "name": "zen_get_page_text",
+    "pass": true,
+    "detail": "title=\"Example Domain\""
+  },
+  {
+    "name": "zen_get_form_fields",
+    "pass": true,
+    "detail": "0 fields found"
+  },
+  {
+    "name": "zen_click",
+    "pass": true,
+    "detail": "{\"clicked\":\"a\"}"
+  },
+  {
+    "name": "zen_evaluate",
+    "pass": true,
+    "detail": "\"Example Domain\""
+  },
+  {
+    "name": "zen_new_tab",
+    "pass": true,
+    "detail": "New tab created: c69e732e-8582-4b5f-aa49-62c8db8d2a77 at https://example.org"
+  },
+  {
+    "name": "zen_list_pages (2 tabs)",
+    "pass": true,
+    "detail": "[\n  {\n    \"index\": 0,\n    \"contextId\": \"eea44f9c-9ef0-4e35-9ad2-df64c92cbf83\",\n    \"url\": \"about:blank\",\n    \"active\": false,\n    \"isAgentTab\": false,\n    \"children\": 0\n  },\n  {\n    \"index\": 1,\n    \"contextId\": \"c69e732e-8582-4b5f-aa49-62c8db8d2a77\",\n    \"url\": \"https://example.org/\",\n    \"active\": "
+  },
+  {
+    "name": "zen_select_page",
+    "pass": true,
+    "detail": "Selected page 0: about:blank (user tab — agent will operate here)"
+  },
+  {
+    "name": "zen_peek_text",
+    "pass": true,
+    "detail": "title=\"Example Domain\""
+  },
+  {
+    "name": "zen_peek_screenshot",
+    "pass": true,
+    "detail": "image data present"
+  },
+  {
+    "name": "zen_wait",
+    "pass": true,
+    "detail": "waited 513ms"
+  },
+  {
+    "name": "zen_wait_for",
+    "pass": true,
+    "detail": "Found selector \"body\" after 0ms"
+  },
+  {
+    "name": "zen_scroll",
+    "pass": true,
+    "detail": "Scrolled down 200px"
+  },
+  {
+    "name": "zen_press_key",
+    "pass": true,
+    "detail": "Pressed Escape"
+  },
+  {
+    "name": "zen_fill",
+    "pass": true,
+    "detail": "{\"filled\":\"#test-input\",\"value\":\"hello world\"}"
+  },
+  {
+    "name": "zen_check",
+    "pass": true,
+    "detail": "{\"selector\":\"#test-cb\",\"checked\":true}"
+  },
+  {
+    "name": "zen_select_option",
+    "pass": true,
+    "detail": "{\"selected\":\"b\",\"text\":\"Option b\"}"
+  },
+  {
+    "name": "zen_fill_form",
+    "pass": true,
+    "detail": "[\n  {\n    \"selector\": \"#test-input\",\n    \"action\": \"fill\",\n    \"status\": \"ok\"\n  },\n  {\n    \"selector\": \"#test-select\",\n    \"action\": \"select\",\n    \"status\": \"ok\"\n  },\n  {\n    \"selector\": \"#test-cb\",\n    \"action\": \"uncheck\",\n    \"status\": \"ok\"\n  }\n]"
+  },
+  {
+    "name": "zen_close_tab",
+    "pass": true,
+    "detail": "Closed tab 2: https://example.com/"
+  },
+  {
+    "name": "zen_reconnect",
+    "pass": true,
+    "detail": "Reconnected to Zen Browser. Session active."
+  }
+]

@@ -8,7 +8,7 @@
 A zombie is any resource that persists in Zen Browser after the MCP server process that created it has died. Two types:
 
 1. **BiDi Session Zombie** — A `session.new` was called, the session is alive in Zen, but the process that created it is gone. Zen only allows one active session, so new `session.new` calls fail.
-2. **Container Zombie** — A `browser.createUserContext` was called, creating a Container Tab in Zen that persists forever. *(Fixed in d2de3da)*
+2. **Container Zombie** — A `browser.createUserContext` was called, creating a Container Tab in Zen that persists forever. _(Fixed: d2de3da)_
 
 ---
 
@@ -32,7 +32,7 @@ A zombie is any resource that persists in Zen Browser after the MCP server proce
 
 ### ZOMBIE-3: Auto-reconnect after unexpected WebSocket close
 
-**File:** `src/bidi-client.ts:146-157` (ws.on('close') handler)
+**File:** `src/bidi-client.ts` (ws.on('close') handler)
 **Trigger:** Network interruption, Zen restart, WebSocket timeout
 **What happens:** WebSocket closes → `_scheduleReconnect()` → `connect()` → `acquireSession()` → `session.new`. If old session is still alive (zombie), `session.new` fails.
 **Current mitigation:** `session-store.ts` zombie cleanup handles this case.
@@ -40,7 +40,7 @@ A zombie is any resource that persists in Zen Browser after the MCP server proce
 
 ### ZOMBIE-4: `zen_reconnect` tool
 
-**File:** `src/tools/utility.ts:71-78`
+**File:** `src/tools/utility.ts`
 **Trigger:** User/AI calls `zen_reconnect`
 **What happens:** `disconnect()` → `connect()`. If `disconnect()` fails to send `session.end` (WebSocket already closed, timeout), old session becomes zombie.
 **Current mitigation:** `disconnect()` has try/catch around `session.end`.
@@ -48,7 +48,7 @@ A zombie is any resource that persists in Zen Browser after the MCP server proce
 
 ### ZOMBIE-5: `endSession()` called from `beforeExit`
 
-**File:** `src/index.ts:325-329`, `src/bidi-client.ts:321-331`
+**File:** `src/index.ts`, `src/bidi-client.ts`
 **Trigger:** Node.js `beforeExit` event
 **What happens:** `endSession()` tries `session.end`. If WebSocket is already closed or process is exiting too fast, the async `session.end` might not complete.
 **Current mitigation:** `beforeExit` fires on normal exit when event loop drains.
@@ -70,13 +70,41 @@ A zombie is any resource that persists in Zen Browser after the MCP server proce
 **Current mitigation:** `session-store.ts` detects zombie and tries cleanup.
 **Remaining gap:** If both processes are alive, neither can end the other's session (only the creator can via `webSocketUrl`).
 
+### ZOMBIE-11: `disconnect()` not re-entrant safe _(Fixed: 2026-07-06)_
+
+**File:** `src/bidi-client.ts:disconnect()`
+**Trigger:** Two callers invoke `disconnect()` concurrently (e.g., `transport.onclose` + `SIGTERM` handler + `endSession()` + `zen_reconnect`)
+**What happened:** Second caller enters `_doDisconnect()` while first is still awaiting `session.end`. Both race on `this.ws.terminate()`.
+**Fix:** Shared-promise pattern — `_doDisconnect()` stores its promise in `_disconnectPromise`. Second caller awaits the same promise instead of entering a second copy.
+
+### ZOMBIE-12: Reconnect timer not cancelled on intentional disconnect _(Fixed: 2026-07-06)_
+
+**File:** `src/bidi-client.ts:_scheduleReconnect()`
+**Trigger:** `disconnect()` or `endSession()` called while reconnect timer is pending
+**What happened:** Timer fires after disconnect → `connect()` → new session → zombie.
+**Fix:** Timer handle stored in `_reconnectTimer`. Cleared in `disconnect()` and `endSession()`. Callback also re-checks `_intentionalDisconnect` after setTimeout delay.
+
+### ZOMBIE-13: `endSession()` didn't set `_intentionalDisconnect` _(Fixed: 2026-07-06)_
+
+**File:** `src/bidi-client.ts:endSession()`
+**Trigger:** `endSession()` called directly (e.g., from `beforeExit`)
+**What happened:** `session.end` sent, but `ws` not terminated. If `onclose` fires from the `session.end` response, reconnect logic triggers because `_intentionalDisconnect` was still `false`.
+**Fix:** `endSession()` now sets `_intentionalDisconnect = true`, clears reconnect timer, and terminates WebSocket.
+
+### ZOMBIE-14: MCP server keeps process alive after disconnect _(Fixed: 2026-07-06)_
+
+**File:** `src/index.ts:transport.onclose`
+**Trigger:** MCP client closes stdio stream while server is still running
+**What happened:** `bidi.disconnect()` called but no `process.exit(0)`. Node event loop stays alive (from per-request `setTimeout` timers in `BiDiClient.send()`). Process hangs until SIGKILL.
+**Fix:** Added `process.exit(0)` after `bidi.disconnect()` in `transport.onclose`.
+
 ---
 
 ## Fixed Zombie Vectors
 
-### ZOMBIE-10: Container Tab pileup *(Fixed: d2de3da)*
+### ZOMBIE-10: Container Tab pileup _(Fixed: d2de3da)_
 
-**File:** `src/bidi-client.ts:103-126` (old `_ensureAgentTab`)
+**File:** `src/bidi-client.ts` (old `_ensureAgentTab`)
 **Trigger:** Every `session.new` via `acquireSession()`
 **What happened:** `_ensureAgentTab()` called `browser.createUserContext` on every session start, creating a new Container Tab in Zen. Never cleaned up.
 **Fix:** Removed `browser.createUserContext` entirely. Agent tab now lives in default context. Isolation works via separate tabs, not containers.
@@ -85,16 +113,20 @@ A zombie is any resource that persists in Zen Browser after the MCP server proce
 
 ## Mitigation Summary
 
-| Vector | Status | Mitigation |
-|--------|--------|------------|
-| ZOMBIE-1 | Partial | `session-store.ts` saves `webSocketUrl`, auto-cleanup on next start |
-| ZOMBIE-2 | Partial | Same as above — depends on `webSocketUrl` being saved |
-| ZOMBIE-3 | Partial | Same as above |
-| ZOMBIE-4 | Partial | `disconnect()` has try/catch, but no retry on timeout |
-| ZOMBIE-5 | Partial | Six-layer cleanup in `index.ts`, but no re-entry protection in `endSession()` |
-| ZOMBIE-6 | Partial | SIGTERM handler exists, but `proc.kill()` doesn't wait |
-| ZOMBIE-7 | Partial | Error message tells user to restart Zen |
-| ZOMBIE-10 | **Fixed** | Container creation removed entirely |
+| Vector    | Status    | Mitigation                                                                    |
+| --------- | --------- | ----------------------------------------------------------------------------- |
+| ZOMBIE-1  | Partial   | `session-store.ts` saves `webSocketUrl`, auto-cleanup on next start           |
+| ZOMBIE-2  | Partial   | Same as above — depends on `webSocketUrl` being saved                         |
+| ZOMBIE-3  | Partial   | Same as above                                                                 |
+| ZOMBIE-4  | Partial   | `disconnect()` has try/catch, but no retry on timeout                         |
+| ZOMBIE-5  | Partial   | Six-layer cleanup in `index.ts`, but no re-entry protection in `endSession()` |
+| ZOMBIE-6  | Partial   | SIGTERM handler exists, but `proc.kill()` doesn't wait                        |
+| ZOMBIE-7  | Partial   | Error message tells user to restart Zen                                       |
+| ZOMBIE-10 | **Fixed** | Container creation removed entirely                                           |
+| ZOMBIE-11 | **Fixed** | Shared-promise pattern in `disconnect()`                                      |
+| ZOMBIE-12 | **Fixed** | Reconnect timer cleared on intentional disconnect                             |
+| ZOMBIE-13 | **Fixed** | `endSession()` sets `_intentionalDisconnect`, terminates ws                   |
+| ZOMBIE-14 | **Fixed** | `process.exit(0)` after disconnect in `transport.onclose`                     |
 
 ---
 
@@ -110,7 +142,6 @@ The only 100% reliable fix is architectural: **keep a single long-lived server p
 
 - `src/session-store.ts` — Session persistence, zombie detection, `endZombieSession()`
 - `src/bidi-client.ts` — `acquireSession()`, `createFreshSession()`, `disconnect()`, `endSession()`, `_scheduleReconnect()`
-- `src/reaper.ts` — Standalone zombie reaper (manual use only)
 - `src/index.ts` — Six-layer cleanup handlers (SIGINT, SIGTERM, beforeExit, etc.)
 - `src/tools/utility.ts` — `zen_reconnect` tool
 - `tests/test-all-features.cjs` — Test harness (creates zombies on exit)
