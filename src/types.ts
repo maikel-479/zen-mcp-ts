@@ -159,3 +159,20 @@ export const WaitForSchema = z.object({
 });
 
 export const ReconnectSchema = z.object({});
+
+export const PeekScreenshotSchema = z.object({
+  index: z
+    .number()
+    .int()
+    .min(0)
+    .describe("Tab index from zen_list_pages (default: user's active tab)"),
+});
+
+export const PeekTextSchema = z.object({
+  index: z
+    .number()
+    .int()
+    .min(0)
+    .describe("Tab index from zen_list_pages (default: user's active tab)"),
+  maxLength: z.number().int().optional().describe("Max characters of body text (default: 8000)"),
+});

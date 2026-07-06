@@ -2,7 +2,6 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod/v4";
 
 import { BiDiClient } from "./bidi-client.js";
 import { registerBrowseTools } from "./tools/browse.js";
@@ -30,6 +29,8 @@ import {
   WaitSchema,
   WaitForSchema,
   ReconnectSchema,
+  PeekScreenshotSchema,
+  PeekTextSchema,
 } from "./types.js";
 
 const PORT = parseInt(process.env.ZEN_DEBUG_PORT || "9222");
@@ -46,7 +47,7 @@ const utilityTools = registerUtilityTools(bidi);
 
 const server = new McpServer({
   name: "zen-browser",
-  version: "1.0.0",
+  version: "2.0.0",
 });
 
 // ─── Browse Tools ───────────────────────────────────────────────────
@@ -54,7 +55,8 @@ const server = new McpServer({
 server.registerTool(
   "zen_list_pages",
   {
-    description: "List all open pages/tabs in Zen browser with URLs and titles",
+    description:
+      "List all open tabs. The agent's own tab is marked [agent]. User tabs are safe to peek at.",
     inputSchema: ListPagesSchema.shape,
   },
   async () => browseTools.zen_list_pages(),
@@ -63,7 +65,8 @@ server.registerTool(
 server.registerTool(
   "zen_select_page",
   {
-    description: "Select a page/tab by index (from zen_list_pages) as the active target",
+    description:
+      "Switch the agent's active target to a specific tab by index. The agent will operate on that tab until you select another.",
     inputSchema: SelectPageSchema.shape,
   },
   async (args) => browseTools.zen_select_page(args as { index: number }),
@@ -111,7 +114,7 @@ server.registerTool(
 server.registerTool(
   "zen_screenshot",
   {
-    description: "Take a screenshot of the current page",
+    description: "Take a screenshot of the agent's current active tab",
     inputSchema: ScreenshotSchema.shape,
   },
   async () => seeTools.zen_screenshot(),
@@ -121,7 +124,7 @@ server.registerTool(
   "zen_get_page_text",
   {
     description:
-      "Get the page title, URL, and visible text content. Useful for quickly understanding what is on the page.",
+      "Get the page title, URL, and visible text content from the agent's current active tab.",
     inputSchema: GetPageTextSchema.shape,
   },
   async (args) => seeTools.zen_get_page_text(args as { maxLength?: number }),
@@ -137,12 +140,32 @@ server.registerTool(
   async () => seeTools.zen_get_form_fields(),
 );
 
+server.registerTool(
+  "zen_peek_screenshot",
+  {
+    description:
+      "Peek at a user's tab by index — take a screenshot without switching the agent's active context. Use zen_list_pages to see tab indices.",
+    inputSchema: PeekScreenshotSchema.shape,
+  },
+  async (args) => seeTools.zen_peek_screenshot(args as { index: number }),
+);
+
+server.registerTool(
+  "zen_peek_text",
+  {
+    description:
+      "Peek at a user's tab by index — get page text without switching the agent's active context. Use zen_list_pages to see tab indices.",
+    inputSchema: PeekTextSchema.shape,
+  },
+  async (args) => seeTools.zen_peek_text(args as { index: number; maxLength?: number }),
+);
+
 // ─── Interact Tools ─────────────────────────────────────────────────
 
 server.registerTool(
   "zen_click",
   {
-    description: "Click an element by CSS selector",
+    description: "Click an element by CSS selector in the agent's active tab",
     inputSchema: ClickSchema.shape,
   },
   async (args) => interactTools.zen_click(args as { selector: string }),
@@ -250,8 +273,25 @@ server.registerTool(
   async () => utilityTools.zen_reconnect(),
 );
 
-// ─── Graceful Shutdown ──────────────────────────────────────────────
+// ─── Six-Layer Cleanup ──────────────────────────────────────────────
 
+// Layer 1: Transport close (set after transport is created)
+let transport: StdioServerTransport;
+
+// Layer 2: stdin end/close
+process.stdin.on("end", () => {
+  log("stdin ended");
+  bidi
+    .disconnect()
+    .catch(() => {})
+    .finally(() => process.exit(0));
+});
+process.stdin.on("close", () => {
+  log("stdin closed");
+  bidi.disconnect().catch(() => {});
+});
+
+// Layer 3: Signals
 async function gracefulShutdown(signal: string) {
   log(`Received ${signal}, cleaning up...`);
   try {
@@ -268,20 +308,39 @@ if (process.platform !== "win32") {
   process.on("SIGHUP", () => gracefulShutdown("SIGHUP"));
 }
 
+// Layer 4: Uncaught errors
+process.on("uncaughtException", async (err) => {
+  console.error("uncaughtException:", err);
+  await bidi.disconnect().catch(() => {});
+  process.exit(1);
+});
+
+process.on("unhandledRejection", async (reason) => {
+  console.error("unhandledRejection:", reason);
+  await bidi.disconnect().catch(() => {});
+  process.exit(1);
+});
+
+// Layer 5: beforeExit (synchronous cleanup of state)
 process.on("beforeExit", async () => {
   try {
     await bidi.endSession();
   } catch {}
 });
 
-process.stdin.on("end", () => {
-  bidi.disconnect().catch(() => {}).finally(() => process.exit(0));
+// Layer 6: process exit (logs only — no async work runs here)
+process.on("exit", (code) => {
+  log(`process exiting with code ${code}`);
 });
 
 // ─── Start Server ───────────────────────────────────────────────────
 
 async function main() {
-  const transport = new StdioServerTransport();
+  transport = new StdioServerTransport();
+  transport.onclose = async () => {
+    log("Transport closed");
+    await bidi.disconnect();
+  };
   await server.connect(transport);
   log(`Server started, connecting to Zen on ws://127.0.0.1:${PORT}/session`);
 }

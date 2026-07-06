@@ -1,5 +1,5 @@
-import os from "node:os";
 import WebSocket from "ws";
+import { acquireSession, deleteRecord } from "./session-store.js";
 import type {
   BiDiResponse,
   BrowsingContext,
@@ -7,7 +7,6 @@ import type {
   NavigateResult,
   ScreenshotResult,
   EvaluateResult,
-  SessionNewResult,
 } from "./types.js";
 
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -17,25 +16,8 @@ function log(...args: unknown[]) {
   console.error("[zen-mcp]", ...args);
 }
 
-function getZenBinaryPath(): string {
-  switch (os.platform()) {
-    case "darwin":
-      return "/Applications/Zen.app/Contents/MacOS/zen";
-    case "win32":
-      return "C:\\Program Files\\Zen Browser\\zen.exe";
-    case "linux":
-      return "zen";
-    default:
-      return "zen";
-  }
-}
-
 function getStartCommand(port: number): string {
-  const bin = getZenBinaryPath();
-  if (os.platform() === "win32") {
-    return `"${bin}" --remote-debugging-port ${port}`;
-  }
-  return `${bin} --remote-debugging-port ${port}`;
+  return `zen --remote-debugging-port ${port}`;
 }
 
 export class BiDiClient {
@@ -50,10 +32,14 @@ export class BiDiClient {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
+
+  private _agentContext: string | null = null;
   private _currentContext: string | null = null;
+  private _userContext: string | null = null;
   private _intentionalDisconnect = false;
   private _reconnecting = false;
   private _connectPromise: Promise<void> | null = null;
+  private _cleaningUp = false;
 
   constructor(private port: number) {}
 
@@ -65,8 +51,8 @@ export class BiDiClient {
     this._currentContext = ctx;
   }
 
-  private get wsUrl(): string {
-    return `ws://127.0.0.1:${this.port}/session`;
+  get agentContext(): string | null {
+    return this._agentContext;
   }
 
   async connect(): Promise<void> {
@@ -88,68 +74,55 @@ export class BiDiClient {
       this.ws = null;
     }
 
-    return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.wsUrl);
+    try {
+      const { ws, sessionId, reused } = await acquireSession(this.port);
+      this.ws = ws;
+      this.sessionId = sessionId;
+      this._setupListeners(ws);
 
-      const onError = (e: Error) => {
-        ws.removeListener("open", onOpen);
-        reject(
-          new Error(
-            `Cannot connect to Zen Browser at ${this.wsUrl}\n` +
-              `Make sure Zen is running with:\n  ${getStartCommand(this.port)}`,
-          ),
+      if (reused) {
+        log("Reattached to existing session:", sessionId);
+      }
+
+      await this._ensureAgentTab();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (
+        msg.includes("Maximum number of active sessions") ||
+        msg.includes("session not created")
+      ) {
+        throw new Error(
+          `A foreign BiDi session is attached to Zen.\n` +
+            `Close it or restart Zen:\n  ${getStartCommand(this.port)}`,
         );
-      };
-
-      const onOpen = async () => {
-        ws.removeListener("error", onError);
-        log("WebSocket connected");
-        this.ws = ws;
-        this._setupListeners(ws);
-        try {
-          await this._createSession();
-          resolve();
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (
-            msg.includes("Maximum number of active sessions") ||
-            msg.includes("session not created")
-          ) {
-            log("Zombie session detected — attempting to reuse existing session");
-            try {
-              await this._reuseSession();
-              resolve();
-            } catch {
-              reject(
-                new Error(
-                  `Zen Browser has a zombie BiDi session that cannot be reused.\n` +
-                    `Restart Zen Browser:\n  ${getStartCommand(this.port)}`,
-                ),
-              );
-            }
-          } else {
-            reject(e instanceof Error ? e : new Error(msg));
-          }
-        }
-      };
-
-      ws.once("open", onOpen);
-      ws.once("error", onError);
-    });
+      }
+      throw e instanceof Error ? e : new Error(msg);
+    }
   }
 
-  private async _createSession(): Promise<void> {
-    const resp = await this.send("session.new", { capabilities: {} });
-    const sessionResult = resp.result as unknown as SessionNewResult;
-    this.sessionId = sessionResult.sessionId;
-    log("Session created:", this.sessionId);
+  private async _ensureAgentTab(): Promise<void> {
+    if (this._agentContext) return;
 
-    const treeResp = await this.send("browsingContext.getTree", {});
-    const treeResult = treeResp.result as unknown as GetTreeResult;
-    if (treeResult.contexts && treeResult.contexts.length > 0) {
-      this._currentContext = treeResult.contexts[0].context;
-      log("Active context:", this._currentContext);
+    // Create isolated user context for agent
+    try {
+      const ctxResp = await this.send("browser.createUserContext", {});
+      const result = ctxResp.result as unknown as { userContext: string };
+      this._userContext = result.userContext;
+      log("Agent user context:", this._userContext);
+    } catch (e) {
+      log("browser.createUserContext failed (non-fatal):", e);
     }
+
+    // Create agent tab in isolated context
+    const createParams: Record<string, unknown> = { type: "tab" };
+    if (this._userContext) {
+      createParams.userContext = this._userContext;
+    }
+    const resp = await this.send("browsingContext.create", createParams);
+    const result = resp.result as unknown as { context: string };
+    this._agentContext = result.context;
+    this._currentContext = this._agentContext;
+    log("Agent tab:", this._agentContext);
   }
 
   private async _reuseSession(): Promise<void> {
@@ -158,6 +131,7 @@ export class BiDiClient {
     const treeResult = treeResp.result as unknown as GetTreeResult;
     if (treeResult.contexts && treeResult.contexts.length > 0) {
       this._currentContext = treeResult.contexts[0].context;
+      this._agentContext = this._currentContext;
       log("Reused active context:", this._currentContext);
     } else {
       throw new Error("No active browsing contexts found to reuse");
@@ -184,11 +158,11 @@ export class BiDiClient {
       } catch {}
     });
 
-    ws.on("close", (code, reason) => {
+    ws.on("close", (code, _reason) => {
       log(`WebSocket closed (code: ${code})`);
       this.ws = null;
       this.sessionId = null;
-      for (const [id, { reject, timer }] of this.pending) {
+      for (const [, { reject, timer }] of this.pending) {
         clearTimeout(timer);
         reject(new Error("Connection closed"));
       }
@@ -275,6 +249,14 @@ export class BiDiClient {
     return this._currentContext;
   }
 
+  async getContextByIndex(index: number): Promise<string> {
+    const contexts = await this.getContexts();
+    if (index < 0 || index >= contexts.length) {
+      throw new Error(`Invalid tab index ${index}. ${contexts.length} tabs available.`);
+    }
+    return contexts[index].context;
+  }
+
   async navigate(url: string): Promise<NavigateResult> {
     const ctx = await this.getActiveContext();
     const resp = await this.send("browsingContext.navigate", {
@@ -285,8 +267,8 @@ export class BiDiClient {
     return resp.result as unknown as NavigateResult;
   }
 
-  async evaluate(expression: string): Promise<EvaluateResult> {
-    const ctx = await this.getActiveContext();
+  async evaluate(expression: string, contextId?: string): Promise<EvaluateResult> {
+    const ctx = contextId || (await this.getActiveContext());
     const resp = await this.send("script.evaluate", {
       expression,
       target: { context: ctx },
@@ -299,8 +281,9 @@ export class BiDiClient {
   async callFunction(
     fn: string,
     args: Array<{ type: string; value: unknown }> = [],
+    contextId?: string,
   ): Promise<BiDiResponse> {
-    const ctx = await this.getActiveContext();
+    const ctx = contextId || (await this.getActiveContext());
     return this.send("script.callFunction", {
       functionDeclaration: fn,
       arguments: args,
@@ -310,18 +293,21 @@ export class BiDiClient {
     });
   }
 
-  async screenshot(): Promise<ScreenshotResult> {
-    const ctx = await this.getActiveContext();
+  async screenshot(contextId?: string): Promise<ScreenshotResult> {
+    const ctx = contextId || (await this.getActiveContext());
     const resp = await this.send("browsingContext.captureScreenshot", { context: ctx });
     return resp.result as unknown as ScreenshotResult;
   }
 
   async createTab(url = "about:blank"): Promise<string> {
     await this.ensureConnected();
-    const resp = await this.send("browsingContext.create", { type: "tab" });
+    const params: Record<string, unknown> = { type: "tab" };
+    if (this._userContext) {
+      params.userContext = this._userContext;
+    }
+    const resp = await this.send("browsingContext.create", params);
     const result = resp.result as unknown as { context: string };
     const ctx = result.context;
-    this._currentContext = ctx;
     if (url !== "about:blank") {
       await this.send("browsingContext.navigate", { context: ctx, url, wait: "interactive" });
     }
@@ -334,10 +320,17 @@ export class BiDiClient {
       const remaining = await this.getContexts();
       this._currentContext = remaining.length > 0 ? remaining[0].context : null;
     }
+    if (this._agentContext === contextId) {
+      this._agentContext = null;
+      await this._ensureAgentTab();
+    }
   }
 
-  async performKeyActions(actions: Array<{ type: string; value: string }>): Promise<void> {
-    const ctx = await this.getActiveContext();
+  async performKeyActions(
+    actions: Array<{ type: string; value: string }>,
+    contextId?: string,
+  ): Promise<void> {
+    const ctx = contextId || (await this.getActiveContext());
     await this.send("input.performActions", {
       context: ctx,
       actions: [{ type: "key", id: "kb1", actions }],
@@ -349,6 +342,7 @@ export class BiDiClient {
       try {
         await this.send("session.end", {}, 3000);
         log("Session ended cleanly");
+        await deleteRecord();
       } catch (e) {
         log("Session end error (non-fatal):", e);
       }
@@ -357,14 +351,26 @@ export class BiDiClient {
   }
 
   async disconnect(): Promise<void> {
+    if (this._cleaningUp) return;
+    this._cleaningUp = true;
     this._intentionalDisconnect = true;
-    await this.endSession();
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {}
-      this.ws = null;
+    try {
+      if (this.ws?.readyState === WebSocket.OPEN && this.sessionId) {
+        await this.send("session.end", {}, 3000);
+        log("Session ended cleanly");
+        await deleteRecord();
+      }
+    } catch (e) {
+      log("Disconnect error (non-fatal):", e);
+    } finally {
       this.sessionId = null;
+      if (this.ws) {
+        try {
+          this.ws.terminate();
+        } catch {}
+        this.ws = null;
+      }
+      this._cleaningUp = false;
     }
   }
 

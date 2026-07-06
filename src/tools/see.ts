@@ -129,6 +129,36 @@ export function registerSeeTools(bidi: BiDiClient) {
       `);
       return text(JSON.stringify(extractValue(result), null, 2));
     },
+
+    /** Peek at a user's tab without switching the agent's active context. */
+    zen_peek_screenshot: async (args: { index: number }): Promise<ToolResult> => {
+      const ctxId = await bidi.getContextByIndex(args.index);
+      const result = await bidi.screenshot(ctxId);
+      if (result.data) {
+        return { content: [{ type: "image", data: result.data, mimeType: "image/png" }] };
+      }
+      return text("Screenshot captured (no data returned)");
+    },
+
+    /** Get text from a user's tab without switching the agent's active context. */
+    zen_peek_text: async (args: { index: number; maxLength?: number }): Promise<ToolResult> => {
+      const maxLen = args?.maxLength || 8000;
+      const ctxId = await bidi.getContextByIndex(args.index);
+      const result = await bidi.callFunction(
+        `
+        function(maxLen) {
+          return {
+            title: document.title,
+            url: location.href,
+            text: document.body.innerText.substring(0, maxLen),
+          };
+        }
+      `,
+        [{ type: "number", value: maxLen }],
+        ctxId,
+      );
+      return text(JSON.stringify(extractValue(result), null, 2));
+    },
   };
 }
 

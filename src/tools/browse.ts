@@ -5,11 +5,13 @@ export function registerBrowseTools(bidi: BiDiClient) {
   return {
     zen_list_pages: async (): Promise<ToolResult> => {
       const contexts = await bidi.getContexts();
+      const agentCtx = bidi.agentContext;
       const pages = contexts.map((ctx, i) => ({
         index: i,
         contextId: ctx.context,
         url: ctx.url || "",
         active: ctx.context === bidi.currentContext,
+        isAgentTab: ctx.context === agentCtx,
         children: ctx.children?.length || 0,
       }));
       return text(JSON.stringify(pages, null, 2));
@@ -21,7 +23,11 @@ export function registerBrowseTools(bidi: BiDiClient) {
         return text(`Invalid index ${args.index}. ${contexts.length} pages available.`);
       }
       bidi.currentContext = contexts[args.index].context;
-      return text(`Selected page ${args.index}: ${contexts[args.index].url}`);
+      const isAgent = contexts[args.index].context === bidi.agentContext;
+      return text(
+        `Selected page ${args.index}: ${contexts[args.index].url}` +
+          (isAgent ? " (agent tab)" : " (user tab — agent will operate here)"),
+      );
     },
 
     zen_new_tab: async (args: { url?: string }): Promise<ToolResult> => {
