@@ -164,7 +164,22 @@ export function registerSeeTools(bidi: BiDiClient) {
 
 export function extractValue(result: unknown): unknown {
   if (!result) return undefined;
-  const r = (result as { result?: BiDiResult }).result || (result as BiDiResult);
+
+  // Unwrap BiDiResponse envelope(s).
+  // Zen's BiDi can return double-wrapped responses:
+  //   { type: "success", result: { type: "success", result: { type: "object", value: [...] } } }
+  // The actual RemoteResult has a type like "string"|"number"|"object"|etc.
+  // Keep unwrapping while we see type:"success" with a nested result.
+  let r: BiDiResult = result as BiDiResult;
+  while (
+    r &&
+    (r as unknown as { type?: string }).type === "success" &&
+    (r as unknown as { result?: unknown }).result &&
+    typeof (r as unknown as { result?: unknown }).result === "object"
+  ) {
+    r = (r as unknown as { result: BiDiResult }).result;
+  }
+
   if (r.type === "string") return r.value;
   if (r.type === "number") return r.value;
   if (r.type === "boolean") return r.value;
@@ -176,6 +191,9 @@ export function extractValue(result: unknown): unknown {
       obj[typeof k === "string" ? k : String((k as { value: unknown }).value)] = extractValue(v);
     }
     return obj;
+  }
+  if (r.type === "node") {
+    return { __biDiNode: true, sharedId: (r as { sharedId?: string }).sharedId };
   }
   return (r as { value?: unknown }).value ?? r;
 }

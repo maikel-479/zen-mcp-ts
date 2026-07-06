@@ -6,19 +6,34 @@ import { extractValue } from "./see.js";
 export function registerInteractTools(bidi: BiDiClient) {
   return {
     zen_click: async (args: { selector: string }): Promise<ToolResult> => {
-      const result = await bidi.callFunction(
-        `
-        function(sel) {
-          const el = document.querySelector(sel);
-          if (!el) return { error: 'Element not found: ' + sel };
-          el.scrollIntoView({ block: 'center' });
-          el.click();
-          return { clicked: sel };
+      const MAX_RETRIES = 5;
+      const DELAY_MS = 200;
+
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const result = await bidi.callFunction(
+          `
+          function(sel) {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            el.scrollIntoView({ block: 'center' });
+            el.click();
+            return { clicked: sel };
+          }
+        `,
+          [{ type: "string", value: args.selector }],
+        );
+
+        const val = extractValue(result);
+        if (val !== null && val !== undefined) {
+          return text(JSON.stringify(val));
         }
-      `,
-        [{ type: "string", value: args.selector }],
-      );
-      return text(JSON.stringify(extractValue(result)));
+
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, DELAY_MS));
+        }
+      }
+
+      return text(JSON.stringify({ error: "Element not found: " + args.selector }));
     },
 
     zen_fill: async (args: { selector: string; value: string }): Promise<ToolResult> => {

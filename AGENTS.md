@@ -9,6 +9,7 @@ vp exec tsc          # Build (TypeScript → dist/)
 vp check             # Format + lint + type check
 vp check --fix       # Auto-fix formatting
 node dist/index.js   # Run server (requires Zen with --remote-debugging-port 9222)
+node tests/test-all-features.cjs  # Run full test suite (requires Zen running)
 ```
 
 `vp build` does NOT work — this is a Node.js CLI project, not a Vite web app. Always use `vp exec tsc`.
@@ -69,7 +70,7 @@ Peek tools (`zen_peek_screenshot`, `zen_peek_text`) accept a tab index and read 
 - **Form filling:** Uses native value setters + `input`/`change` event dispatch for React/Vue/Angular compatibility.
 - **Cross-platform paths** in error messages: macOS `/Applications/Zen.app/Contents/MacOS/zen`, Windows `C:\Program Files\Zen Browser\zen.exe`, Linux `zen` (in PATH).
 - **SIGHUP handler** is skipped on Windows (not a valid signal on win32).
-- `extractValue()` in `see.ts` is shared by all tool modules — it deserializes BiDi serialized results.
+- `extractValue()` in `see.ts` is shared by all tool modules — it deserializes BiDi serialized results. It recursively unwraps BiDiResponse envelopes (`{type:"success", result: {type:"success", result: ...}}`) until reaching a real RemoteValue type (`string`, `number`, `object`, etc.).
 - **Context-aware methods**: `callFunction()`, `evaluate()`, `screenshot()`, `performKeyActions()` all accept optional `contextId` parameter for peek operations.
 
 ## Gotchas
@@ -79,3 +80,15 @@ Peek tools (`zen_peek_screenshot`, `zen_peek_text`) accept a tab index and read 
 - Tool handlers must return objects matching the SDK's `CallToolResult` shape with an index signature — the `ToolResult` interface in `types.ts` handles this.
 - Top-level `await` is used in `index.ts` (works because `"type": "module"` in package.json).
 - BiDi sessions are exclusive — only one session at a time. The agent reuses sessions when possible and creates new ones only when needed.
+
+## Testing
+
+`tests/test-all-features.cjs` — Spawns the MCP server, sends MCP protocol messages over stdio, and tests all 22 tools against a live Zen Browser instance. Requires Zen running with `--remote-debugging-port 9222`.
+
+The test harness validates:
+
+- MCP protocol handshake (initialize, tools/list)
+- Navigation and page inspection (navigate, snapshot, screenshot, get_page_text)
+- Interaction (click, fill, check, select_option, press_key, scroll)
+- Tab management (new_tab, close_tab, select_page, peek_text, peek_screenshot)
+- Utility tools (evaluate, wait, wait_for, reconnect)
