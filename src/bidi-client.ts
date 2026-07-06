@@ -35,7 +35,6 @@ export class BiDiClient {
 
   private _agentContext: string | null = null;
   private _currentContext: string | null = null;
-  private _userContext: string | null = null;
   private _intentionalDisconnect = false;
   private _reconnecting = false;
   private _connectPromise: Promise<void> | null = null;
@@ -103,22 +102,8 @@ export class BiDiClient {
   private async _ensureAgentTab(): Promise<void> {
     if (this._agentContext) return;
 
-    // Create isolated user context for agent
-    try {
-      const ctxResp = await this.send("browser.createUserContext", {});
-      const result = ctxResp.result as unknown as { userContext: string };
-      this._userContext = result.userContext;
-      log("Agent user context:", this._userContext);
-    } catch (e) {
-      log("browser.createUserContext failed (non-fatal):", e);
-    }
-
-    // Create agent tab in isolated context
-    const createParams: Record<string, unknown> = { type: "tab" };
-    if (this._userContext) {
-      createParams.userContext = this._userContext;
-    }
-    const resp = await this.send("browsingContext.create", createParams);
+    // Create agent tab (in default user context — no container needed)
+    const resp = await this.send("browsingContext.create", { type: "tab" });
     const result = resp.result as unknown as { context: string };
     this._agentContext = result.context;
     this._currentContext = this._agentContext;
@@ -301,11 +286,7 @@ export class BiDiClient {
 
   async createTab(url = "about:blank"): Promise<string> {
     await this.ensureConnected();
-    const params: Record<string, unknown> = { type: "tab" };
-    if (this._userContext) {
-      params.userContext = this._userContext;
-    }
-    const resp = await this.send("browsingContext.create", params);
+    const resp = await this.send("browsingContext.create", { type: "tab" });
     const result = resp.result as unknown as { context: string };
     const ctx = result.context;
     if (url !== "about:blank") {
